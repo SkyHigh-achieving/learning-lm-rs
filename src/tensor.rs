@@ -1,9 +1,12 @@
 use std::{slice, sync::Arc, vec};
+use std::marker::PhantomData;
+
 pub struct Tensor<T> {
     data: Arc<Box<[T]>>,
     shape: Vec<usize>,
     offset: usize,
     length: usize,
+    _phantom: PhantomData<T>,
 }
 
 impl<T: Copy + Clone + Default> Tensor<T> {
@@ -14,6 +17,7 @@ impl<T: Copy + Clone + Default> Tensor<T> {
             shape: shape.clone(),
             offset: 0,
             length: length,
+            _phantom: PhantomData,
         }
     }
 
@@ -59,10 +63,21 @@ impl<T: Copy + Clone + Default> Tensor<T> {
             shape: shape.clone(),
             offset: self.offset + start,
             length: new_length,
+            _phantom: PhantomData,
         }
     }
+}
 
-
+impl<T: Copy + Clone + Default> Clone for Tensor<T> {
+    fn clone(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+            shape: self.shape.clone(),
+            offset: self.offset,
+            length: self.length,
+            _phantom: PhantomData,
+        }
+    }
 }
 
 // Some helper functions for testing and debugging

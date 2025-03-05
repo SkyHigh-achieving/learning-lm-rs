@@ -71,7 +71,54 @@ pub fn masked_softmax(y: &mut Tensor<f32>) {
 }
 
 pub fn rms_norm(y: &mut Tensor<f32>, x: &Tensor<f32>, w: &Tensor<f32>, epsilon: f32) {
-    todo!("实现 rms_norm，计算前做一些必要的检查会帮助你后续调试")
+    //todo!("实现 rms_norm，计算前做一些必要的检查会帮助你后续调试")
+    let x_shape=x.shape();
+    let y_shape=y.shape();
+    let w_shape=w.shape();
+
+    let x_last_dim=*x_shape.last().unwrap();
+    let w_first_dim=*w_shape.first().unwrap();
+    assert_eq!(
+        x_last_dim,w_first_dim,
+        "w's first dimension{} must match x's last dimension{}",
+        w_first_dim, x_last_dim
+    );
+
+    assert_eq!(
+        x_shape,y_shape,
+        "Output shape {:?} must match input shape {:?}",
+        y_shape,x_shape  
+    );
+
+    let x_data=x.data();
+    let w_data=w.data();
+    let y_data=unsafe{y.data_mut()};
+
+    let dim=x_last_dim;
+    let num_elements=x.size();
+    let num_chunks=num_elements/dim;
+    
+    let mut mean_sq=vec![0.0;num_chunks];
+    for i in 0..num_chunks{
+        let chunk_start=i*dim;
+        let chunk_end=(i+1)*dim;
+
+        let mut sum=0.0;
+        for j in chunk_start..chunk_end{
+            sum+=x_data[j]*x_data[j];
+        }
+        mean_sq[i]=sum/dim as f32;
+    }
+
+    for i in 0..num_elements{
+        let chunk_idx=i/dim;
+        let w_idx=i%dim;
+
+        let rms=(mean_sq[chunk_idx]+epsilon).sqrt();
+
+        y_data[i]=(x_data[i]/rms)*w_data[w_idx];
+    }
+
 }
 
 // y = silu(x) * y
@@ -83,13 +130,61 @@ pub fn swiglu(y: &mut Tensor<f32>, x: &Tensor<f32>) {
     // let _y = unsafe { y.data_mut() };
     // let _x = x.data();
 
-    todo!("实现 silu，这里给了一些前期准备工作的提示，你可以参考")
+    //todo!("实现 silu，这里给了一些前期准备工作的提示，你可以参考")
+    assert_eq!(y.size(),x.size(),"Tensor x and y must have the same size");
+
+    let y_data=unsafe{ y.data_mut()};
+    let x_data=x.data();
+
+    for(y_elem,x_elem)  in y_data.iter_mut().zip(x_data.iter()){
+        let sigmoid=1.0/(1.0+(-x_elem).exp());
+        *y_elem = *x_elem * sigmoid * *y_elem; 
+    }
 }
 
 // C = beta * C + alpha * A @ B^T
 // hint: You don't need to do an explicit transpose of B
 pub fn matmul_transb(c: &mut Tensor<f32>, beta: f32, a: &Tensor<f32>, b: &Tensor<f32>, alpha: f32) {
-    todo!("实现 matmul_transb，计算前做一些必要的检查会帮助你后续调试");
+    //todo!("实现 matmul_transb，计算前做一些必要的检查会帮助你后续调试");
+    let a_shape=a.shape();
+    let m=a_shape[0];
+    let k_a=a_shape[1];
+
+    let b_shape=b.shape();
+    let n=b_shape[0];
+    let k_b=b_shape[1];
+
+    let c_shape=c.shape();
+    assert_eq!{
+        k_a,k_b,
+        "A的列数 {} 必须等于B 的列数 {}",
+        k_a,k_b
+    };
+
+    assert_eq!{
+        c_shape,
+        &[m,n],
+        "C的形状 {:?} 必须为 {} * {}",
+        c_shape,
+        m,
+        n
+    };
+
+    let a_data=a.data();
+    let b_data=b.data();
+    let c_data=unsafe {c.data_mut()};
+
+    for i in 0..m{
+        for j in 0..n{
+            let mut dot=0.0;
+            for k in 0..k_a{
+                dot+=a_data[i*k_a+k]*b_data[j*k_b+k];
+            }
+
+            let idx=i*n+j;
+            c_data[idx]=beta*c_data[idx]+alpha*dot;
+        }   
+    }
 }
 
 // Dot product of two tensors (treated as vectors)

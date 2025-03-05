@@ -101,10 +101,43 @@ impl Llama<f32> {
             let full_k = &mut cache.k_cache(layer, 0); // (total_seq, n_kv_h * dqkv)
             let full_v = &mut cache.v_cache(layer, 0); // (total_seq, n_kv_h * dqkv)
 
-            todo!("self_attention(...)");
-            todo!("down_proj matmul and add residual");
+            //todo!("self_attention(...)");
+            self_attention(
+                &mut hidden_states,
+                &mut att_scores,
+                q,
+                full_k,
+                full_v,
+                self.n_kv_h,
+                n_groups,
+                seq_len,
+                total_seq_len,
+                self.dqkv
+            );
+            //todo!("down_proj matmul and add residual");
+            // 2. 替换down_proj和residual todo
+            OP::matmul_transb(&mut residual, 1.0, &hidden_states, &self.params.wo[layer], 1.0);
 
-            todo!("mlp(...)");
+            //todo!("mlp(...)");
+            // 3. 替换mlp todo
+            OP::rms_norm(
+                &mut hidden_states,
+                &residual,
+                &self.params.rms_ffn_w[layer],
+                self.eps,
+            );
+
+            mlp(
+                &mut residual,
+                &mut hidden_states,
+                &mut gate_buf,
+                &mut up_buf,
+                &self.params.w_up[layer],
+                &self.params.w_down[layer],
+                &self.params.w_gate[layer],
+                &self.params.rms_ffn_w[layer],
+                self.eps,
+            );
         }
 
         // No matter what seq_len, the output is always a 1D vector of length vocab,
@@ -125,6 +158,7 @@ impl Llama<f32> {
         logits
     }
 
+    // 2. 修复 generate 函数
     pub fn generate(
         &self,
         token_ids: &[u32],
@@ -132,28 +166,59 @@ impl Llama<f32> {
         top_p: f32,
         top_k: u32,
         temperature: f32,
-    ) -> Vec<u32>{
-        let mut result = Vec::<u32>::new();
-        
-        todo!("实现文本生成");
-        
+    ) -> Vec<u32> {
+        // 初始化结果数组
+        let mut result = token_ids.to_vec();
+        let mut cache = self.new_cache();
+
+        while result.len() < max_len {
+            // 构造输入tensor
+            let input = Tensor::new(
+                result[result.len()-1..].to_vec(),
+                &vec![1]
+            );
+            
+            // 前向计算
+            let logits = self.forward(&input, &mut cache);
+            
+            // 采样下一个token
+            let next_token = OP::random_sample(&logits, top_p, top_k, temperature);
+            
+            // 检查终止条件
+            if next_token == self.eos_token_id {
+                break;
+            }
+            
+            // 添加到结果
+            result.push(next_token);
+        }
+
         result
     }
 }
 
 fn self_attention(
     hidden_states: &mut Tensor<f32>, // (seq, n_kv_h * n_groups * dqkv)
-    att_scores: &mut Tensor<f32>,    // (n_kv_h, n_groups, seq, total_seq)
+    _att_scores: &mut Tensor<f32>,    // 添加下划线
     q: &Tensor<f32>,                 // (seq, n_kv_h * n_groups * dqkv)
     k: &Tensor<f32>,                 // (total_seq, n_kv_h * dqkv)
     v: &Tensor<f32>,                 // (total_seq, n_kv_h * dqkv)
-    n_kv_h: usize,
-    n_groups: usize,
-    seq_len: usize,
-    total_seq_len: usize,
+    _n_kv_h: usize,                   // 添加下划线
+    _n_groups: usize,                 // 添加下划线
+    _seq_len: usize,                  // 添加下划线
+    _total_seq_len: usize,           // 添加下划线
     dqkv: usize,
 ) {
-    todo!("Implement self_attention");
+    //todo!("Implement self_attention");
+    // 1. 计算注意力分数
+    let scale = (dqkv as f32).powf(-0.5);
+    OP::matmul_transb(_att_scores, scale, q, k, 0.0);
+    
+    // 2. 应用softmax
+    OP::masked_softmax(_att_scores);
+    
+    // 3. 计算加权和得到输出
+    OP::matmul_transb(hidden_states, 1.0, _att_scores, v, 0.0);
 }
 
 fn mlp(
@@ -167,7 +232,23 @@ fn mlp(
     rms_w: &Tensor<f32>,
     eps: f32,
 ) {
-    todo!("Implement mlp");
+
+    //直接在residual上进行下投影，避免额外的tensor分配
+    //matmul_transb中使用beta=1.0来保持残差连接
+    //去掉了手动的残差加法，通过matmul_transb的beta参数实现
+    //todo!("Implement mlp");
+    // 1. RMS normalization
+    OP::rms_norm(hidden_states, residual, rms_w, eps);
+
+    // 2. Gate and Up projections
+    OP::matmul_transb(gate, 0.0, hidden_states, w_gate, 1.0);
+    OP::matmul_transb(up, 0.0, hidden_states, w_up, 1.0);
+
+    // 3. SwiGLU activation
+    OP::swiglu(up, gate);
+
+    // 4. Down projection
+    OP::matmul_transb(residual, 1.0, up, w_down, 1.0);
 }
 
 #[test]
@@ -212,8 +293,13 @@ pub fn test_mlp() {
 pub fn test_load_safetensors() {
     use std::path::PathBuf;
     use crate::tensor::float_eq;
+    
     let project_dir = env!("CARGO_MANIFEST_DIR");
     let model_dir = PathBuf::from(project_dir).join("models").join("story");
+    
+    // 打印模型目录以便调试
+    println!("Loading model from: {:?}", model_dir);
+    
     let model = Llama::from_safetensors(model_dir);
     assert_eq!(model.vocab, 2048);
     assert_eq!(model.n_layers, 2);
